@@ -9,10 +9,16 @@
 #define MUI_IMPLEMENTATION
 #include <core/mui.h>
 
+#define STR_IMPLEMENTATION
+#include <core/str.h>
+
 #define STB_IMAGE_IMPLEMENTATION
 #include <thirdparty/stb_image.h>
 
 #include <core/types.h>
+
+#define IP_IMPLEMENTATION
+#include <core/ip.h>
 
 #define CHESS_IMPLEMENTATION
 #include "chess.h"
@@ -59,7 +65,31 @@ s32 chess_piece_to_x[] = {
   [CHESS_KIND_KING] = 0,
 };
 
-int main() {
+int main(s32 argc, char **argv) {
+
+  if(argc < 2) {
+    fprintf(stderr, "ERROR: Please provide a ip\n");
+    fprintf(stderr, "USAGE: %s <ip>\n", argv[0]);
+    return 1; 
+  }	  
+  char *hostname = argv[1];
+
+  u16 port = 4040;
+  Ip_Socket s;
+  if(ip_socket_copen(&s, hostname, port, 0) != IP_ERROR_NONE) {
+    fprintf(stderr, "ERROR: Cannot not connect to port: %u\n", port);
+    return 1;
+  }
+  int black = -1;
+  int started = 0;
+  int blacks_turn = 0;
+  str message = {0};
+
+  u8 buf[1024];
+  u64 buf_len = 0;
+
+  Chess_Move move;
+  ////////////////////7
 
   Frame frame;
   if(frame_open(&frame, WIDTH, HEIGHT, 0) != FRAME_ERROR_NONE) {
@@ -99,6 +129,106 @@ int main() {
   Frame_Event event;
   while(frame.running) {
 
+    if(!started) {
+      u64 read;
+      switch(ip_socket_read(&s, buf, sizeof(buf), &read)) {
+      case IP_ERROR_REPEAT:
+	break;
+      case IP_ERROR_NONE:
+	str received_message = str_from(buf, read);
+	if(str_eqc(received_message, "w")) {
+	  black = 0;
+	} else if(str_eqc(received_message, "b")) {
+	  black = 1;
+	} else {
+	  TODO();
+	}
+	started = 1;
+	blacks_turn = 0;
+
+	printf("started!\n");
+	break;
+      default:
+	TODO();
+      }
+      
+    } else {
+
+      if(black == blacks_turn) {
+
+	if(message.len > 0) {
+	  // Its your turn, but you didn't send your move yet. Writing to server ...
+
+	  u64 written;
+	  switch(ip_socket_write(&s, message.data, message.len, &written)) {
+	  case IP_ERROR_NONE:
+	    message = str_from(message.data + written, message.len - written);
+	    break;
+	  case IP_ERROR_REPEAT:
+	    // Do nothing, try again to write in next iteration
+	    break;
+	  default:
+	    TODO();
+	  }							
+
+	  if(message.len == 0) {
+	    // After the message fully transmitted, switch the turn
+	    blacks_turn = 1 - blacks_turn;
+	    buf_len = 0;
+	  }
+	} else {
+	  // Its your turn, reading from stdin ...
+
+	  /* chess_game_dump(&game); */
+	  /* printf("> "); fflush(stdout); */
+
+	  /* u64 read; */
+	  /* if(fs_file_read(&file_stdin, */
+	  /* 		  buf, */
+	  /* 		  sizeof(buf), */
+	  /* 		  &read) != FS_ERROR_NONE) { */
+	  /*   TODO(); */
+	  /* } */
+	  /* if(read >= sizeof(buf)) { */
+	  /*   TODO(); */
+	  /* } */
+	  /* if(read > FS_SEP_LEN) read -= FS_SEP_LEN; */
+	  /* buf[read] ='\0'; */
+
+	  /* if(chess_move_from_cstr((char *) buf, &move) && chess_game_move(&game, &move)) {	 */
+	  /*   // prepare message */
+	  /*   message = str_from((u8 *) &move, sizeof(move));	 */
+	  /* } else { */
+	  /*   // keep reading from stdin */
+	  /* } */
+	}
+
+      } else { // white
+	// Wait for completed message from server. Reading from server ...
+
+	u64 read;
+	switch(ip_socket_read(&s, buf + buf_len, sizeof(buf) - buf_len, &read)) {
+	case IP_ERROR_REPEAT:
+	  break;
+	case IP_ERROR_NONE:
+	  buf_len += read;
+
+	  if(buf_len < sizeof(Chess_Move)) {
+	    // Keep reading ...
+	  } else if(buf_len == sizeof(Chess_Move)) {
+	    if(!chess_game_move(&game, (Chess_Move *) buf)) TODO();
+	    blacks_turn = 1 - blacks_turn;
+	  } else { // buf_len > sizeof(Chess_Move)
+	    TODO();
+	  }
+	  break;
+	default:
+	  TODO();
+	}
+	
+      }
+    }
+
     int clicked = 0;
     int released = 0;
     
@@ -114,17 +244,20 @@ int main() {
 	}
 	if(event.as.key == 'B') {
 	  if(game.history_len > 0) {
-	    chess_game_rewind(&game, game.history_len - 1);  
+	    chess_game_rewind(&game, game.history_len - 1);
 	  }
 	  
 	}
       } break;
       case FRAME_EVENT_MOUSEPRESS: {
-        printf("%f, %f\n", frame.mouse_x, frame.mouse_y);
 	clicked = 1;
       } break;
       case FRAME_EVENT_MOUSERELEASE: {
 	released = 1;
+      } break;
+
+      default: {
+	// pass
       } break;
 	
       }
@@ -143,16 +276,24 @@ int main() {
 	s32 x = (s32) (frame.mouse_x / cell_size.x);
 	s32 y = (s32) (frame.mouse_y / cell_size.y);
 
-	Chess_Move move = {
+	move = (Chess_Move) {
 	  .from = dragged_piece_index,
 	  .to   = x + (CHESS_N - y - 1)*CHESS_N,
 	};
 
-	chess_game_move(&game, &move);
-        
+	if(started && black == blacks_turn && message.len == 0)  {
+	  // chess_game_move(&game, &move);
+	  
+	  if(chess_game_move(&game, &move)) {
+	    // prepare message
+	    message = str_from((u8 *) &move, sizeof(move));
+	  } else {
+	    // try again
+	  }
+	}
+	
       }
       dragged_piece_index = -1;
-      
     }
 
     renderer_begin(&renderer, frame.width, frame.height);

@@ -1,15 +1,6 @@
 #include <stdio.h>
-#include <assert.h>
 
-#define panic(...) do{						\
-    fprintf(stderr, "%s:%d:ERROR: ", __FILE__, __LINE__);	\
-    fflush(stderr);						\
-    fprintf(stderr, __VA_ARGS__); fflush(stderr);		\
-    exit(1);							\
-  }while(0)
-
-#define UNREACHABLE() panic("UNREACHABLE")
-#define TODO() panic("TODO")
+#include <core/types.h>
 
 #define IP_IMPLEMENTATION
 #include <core/ip.h>
@@ -20,261 +11,196 @@
 #define CHESS_IMPLEMENTATION
 #include "chess.h"
 
-typedef unsigned char u8;
-typedef unsigned long long u64;
-
 typedef struct {
-  int black;
-  int okayed;
-
-  u64 id;
+  str message;
+  Ip_Socket *socket;
 } Player;
 
-typedef struct {
-  Player players[2];
-  int announced;
-} Session;
+void abort_game(Ip_Sockets *s, Chess_Game *game, Player *players, u64 index) {
+  printf("Client %llu disconnected\n", index);
+  if(ip_sockets_unregister(s, index) != IP_ERROR_NONE) TODO();
+  *players[index].socket = ip_socket_invalid();
 
-int session_init(Ip_Server *server,
-		 Session *session) {
-
-  if(server->active_clients != 2) {
-    return 0;
+  u64 other_index = 1 - index;
+  if(players[other_index].socket->flags & IP_VALID) {
+    printf("Closing connection to Client %llu\n", other_index);	  
+    if(ip_sockets_unregister(s, other_index) != IP_ERROR_NONE) TODO();
+    ip_socket_close(players[other_index].socket);
+    *players[other_index].socket = ip_socket_invalid();	  
   }
-  session->announced = 0;
+
+  chess_game_default(game);
+  memset(players, 0, sizeof(Player) * 2);
+  players[0].socket = &s->sockets[0];
+  players[1].socket = &s->sockets[1];
   
-  int once = 1;		
-  for(u64 i=0;i<server->sockets_count;i++) {
-    Ip_Socket *s = &server->sockets[i];
-    if(!(s->flags & IP_VALID)) {
-      continue;
-    }
-
-    if(!(s->flags & IP_CLIENT)) {
-      continue;
-    }
-
-    session->players[1 - once] = (Player) {
-      .black  = once,
-      .okayed = 0,
-      .id     = i,
-    };
-
-    str message;
-    if(once) {
-      message = str_fromc("WHITE");
-      once = 0;	    
-    } else { // white
-      message = str_fromc("BLACK");
-    }
-
-    u64 written;
-    switch(ip_socket_writes(s, message, &written)) {
-    case IP_ERROR_NONE:
-      // pass
-      break;
-    default:
-      TODO();
-      break;
-    }
-    if(written != message.len) {
-      TODO();
-    }
-
-  }
-
-  return 1;
 }
 
-void session_update_players(Ip_Server *server,
-			    Session *session,
-			    Chess_Game *game) {
-  
-  for(u64 i=0;i<sizeof(session->players)/sizeof(*session->players);i++) {
-    Player *player = &session->players[i];
-    Ip_Socket *socket = &server->sockets[player->id];
-
-    u64 written;
-    switch(ip_socket_write(socket, (u8 *) game, sizeof(*game), &written)) {
-    case IP_ERROR_NONE:
-      // pass
-      break;
-    default:
-      TODO();
-      break;
-    }
-    if(written != sizeof(*game)) {
-      TODO();
-    }
-  }
-
-}
-
-int session_announce_player(Ip_Server *server, Session *session, Chess_Game *game, u64 id) {
-
-  int all_okay = 1;
-  for(u64 i=0;i<sizeof(session->players)/sizeof(*session->players);i++) {
-    Player *player = &session->players[i];
-    
-    if(player->id == id) {
-      if(player->okayed) {
-	return 0;
-      } else {
-	player->okayed = 1;
-      }
-    }
-
-    all_okay = all_okay && player->okayed;
-  }
-
-  if(!session->announced && all_okay) {
-    session_update_players(server, session, game);
-    session->announced = 1;    
-  }
-  
-  return 1;  
-}
-
-int main() {  
-
-  Ip_Server server;
-  switch(ip_server_open(&server,
-			4040,
-			2)) {
-  case IP_ERROR_NONE:
-    break;
-  default:
+int main() {
+  Ip_Sockets sockets;
+  if(ip_sockets_open(&sockets, 3) != IP_ERROR_NONE) {
     TODO();
-    break;
+  }
+  if(ip_socket_sopen(&sockets.sockets[2], 4040, 0) != IP_ERROR_NONE) {
+    TODO();
+  }
+  if(ip_sockets_register(&sockets, 2) != IP_ERROR_NONE) {
+    TODO();
   }
 
   printf("Listening on port 4040 for incoming connections\n"); fflush(stdout);
 
-  Session session;
   Chess_Game game;
-  printf("sizeof(Game): %llu\n", (u64) sizeof(game)); fflush(stdout);
-  assert(sizeof(game) == 1024);
-  
-  u8 buf[1024];
-  while(1) {
-    
-    u64 index;
+  chess_game_default(&game);
+  Player players[2] = {0};
+  players[0].socket = &sockets.sockets[0];
+  players[1].socket = &sockets.sockets[1];
 
+  u8 buf[1024];
+  u64 buf_len = 0;
+
+  Chess_Move move;
+  Ip_Address address;
+  while(1) {
     int try_again = 0;
-    switch(ip_server_next(&server, &index)) {
+
+    u64 index;
+    Ip_Mode mode;
+    switch(ip_sockets_next(&sockets, &index, &mode)) {
     case IP_ERROR_REPEAT:
-      try_again = 1;
+      try_again = 1;	
       break;
     case IP_ERROR_NONE:
-      // pass
       break;
     default:
       TODO();
-      break;      
     }
     if(try_again) {
       continue;
     }
-    
-    Ip_Socket *socket = &server.sockets[index];            
-    if(socket->flags & IP_SERVER) {
 
-      u64 client_index;
-      Ip_Address address;
-      switch(ip_server_accept(&server, &client_index, &address)) {
-      case IP_ERROR_REPEAT:
-	break;
-      case IP_ERROR_NONE:
-	printf("client %llu connected. Active clients: %llu\n",
-	       client_index,
-	       server.active_clients); fflush(stdout);
-	break;
-      default:
+    Ip_Socket *s = &sockets.sockets[index];
+    if(s->flags & IP_SERVER) {
+      if(mode != IP_MODE_READ) TODO();
+			
+      Ip_Socket *client = players[0].socket;
+      u64 client_index = 0;
+      if(client->flags & IP_VALID) {
+	client = players[1].socket;
+	client_index = 1;
+      }
+      if(client->flags & IP_VALID) TODO();
+      if(ip_socket_accept(s, client, &address) != IP_ERROR_NONE) {
 	TODO();
-	break;
+      }
+      if(ip_sockets_register(&sockets, client_index) != IP_ERROR_NONE) {
+	TODO();
+      }
+      printf("Client %llu connected\n", client_index);
+
+      if((players[0].socket->flags & IP_VALID) &&
+	 (players[1].socket->flags & IP_VALID)) {
+	printf("Starting the game\n");
+
+	players[0].message = str_from((u8 *) "w", 1);
+	players[1].message = str_from((u8 *) "b", 1); 
+	players[0].socket->flags |= IP_WRITING;
+	players[1].socket->flags |= IP_WRITING;
       }
 
-      // Try to Initialize the game
-      if(session_init(&server, &session)) {
-	chess_game_default(&game);
+    } else { // s->flags & IP_CLIENT
+
+      switch(mode) {
+      case IP_MODE_READ: {
+
+	int keep_reading = 1;
+	while(keep_reading) {
+	  /* if(index != game.blacks_turn) TODO(); */
+
+	  u64 read;
+	  Ip_Error error = ip_socket_read(s,
+					  buf + buf_len,
+					  sizeof(buf) - buf_len,
+					  &read);
+	  switch(error) {
+	  case IP_ERROR_NONE:
+	    buf_len += read;
+
+	    if(buf_len < sizeof(Chess_Move)) {
+	      // Keep reading ...
+	    } else if(buf_len == sizeof(Chess_Move)) {
+	      if(!chess_game_move(&game, (Chess_Move *) buf)) TODO();
+	      buf_len = 0;
+
+	      u64 other_index = 1 - index;
+	      memcpy(&move, buf, sizeof(Chess_Move));
+	      players[other_index].message = str_from((u8 *) &move, sizeof(Chess_Move));
+	      players[other_index].socket->flags |= IP_WRITING;
+	      keep_reading = 0;
+	    } else { //buf_len > sizeof(buf_len)
+	      TODO();
+	    }
+	    
+	    break;
+	  case IP_ERROR_REPEAT:
+	    keep_reading = 0;
+	    break;
+	  case IP_ERROR_EOF:
+	    abort_game(&sockets, &game, players, index);
+	    buf_len = 0;
+	    sockets.ret = -1;
+	    keep_reading = 0;
+	    break;
+	  default:
+	    TODO();
+	  }
+
+	}
+
+      } break;
+
+      case IP_MODE_WRITE: {
+	Player *player = &players[index];
+	if(player->message.len == 0) {
+	  TODO();
+	}
+
+	int keep_writing = 1;
+	while(keep_writing && player->message.len > 0) {
+	  u64 written;
+	  Ip_Error error = ip_socket_write(s, 
+					   player->message.data,
+					   player->message.len,
+					   &written);
+	  switch(error) {
+	  case IP_ERROR_NONE:
+	    player->message = str_from(player->message.data + written, player->message.len - written);
+	    break;
+	  case IP_ERROR_REPEAT:
+	    keep_writing = 0;
+	    break;
+	  default:
+	    printf("%d\n", error);
+	    TODO();
+	  }
+	}
+
+	if(player->message.len == 0) {
+	  player->socket->flags &= ~IP_WRITING;
+	}
+      } break;
+
+
+      case IP_MODE_DISCONNECT: {
+	abort_game(&sockets, &game, players, index);
+	buf_len = 0;
+	sockets.ret = -1;
+      } break;
       }
       
-    } else {
-
-      u64 read;
-      switch(ip_socket_read(socket, buf, sizeof(buf), &read)) {
-      case IP_ERROR_NONE:
-	// pass
-	break;
-      case IP_ERROR_CONNECTION_CLOSED:
-	ip_server_discard(&server, index);
-	  
-	printf("client %llu disconnected. Active clients: %llu\n",
-	       index,
-	       server.active_clients); fflush(stdout);
-
-	// Abort the game / Disconnect all clients
-	for(u64 i=0;i<server.sockets_count;i++) {
-	  Ip_Socket *s = &server.sockets[i];
-	  if(!(s->flags & IP_VALID)) {
-	    continue;
-	  }
-
-	  if(!(s->flags & IP_CLIENT)) {
-	    continue;
-	  }
-
-	  ip_socket_close(s);
-	  server.active_clients--;
-
-	  printf("\tClosed connection to client %llu. Active clients: %llu\n",
-		 i,
-		 server.active_clients); fflush(stdout);
-	}
-
-	break;
-      default:
-	TODO();
-	break;
-      }
-	
-      if(!(socket->flags & IP_VALID)) {
-	continue;
-      }
-
-      if(server.active_clients != 2) {
-	continue;
-      }
-
-      if(!session.announced) {
-	if(session_announce_player(&server,
-				   &session,
-				   &game,
-				   index)) {
-	  continue;
-	}
-      }
-      if(!session.announced) {
-	continue;
-      }
-	
-      Chess_Move move = *(Chess_Move *) buf;
-      printf("\tINFO: %d|(%d, %d) -> %d|(%d, %d)\n",
-	     move.from,
-	     move.from % CHESS_N,
-	     move.from / CHESS_N,
-	     move.to,
-	     move.to % CHESS_N,
-	     move.to / CHESS_N); fflush(stdout);
-
-      chess_game_move(&game, &move);
-      session_update_players(&server, &session, &game);
-	
     }
-
-
-    
   }
 
-  return 0;
+  ip_sockets_close(&sockets);
+
 }

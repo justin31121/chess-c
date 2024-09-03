@@ -5,8 +5,8 @@
 #define CHESS_IMPLEMENTATION
 #include "chess.h"
 
-#define IO_IMPLEMENTATION
-#include <core/io.h>
+#define FS_IMPLEMENTATION
+#include <core/fs.h>
 
 typedef unsigned char u8;
 typedef unsigned long long u64;
@@ -23,8 +23,8 @@ typedef unsigned long long u64;
 
 int main() {
 
-  Io_File file_stdin;
-  if(io_file_stdin(&file_stdin) != IO_ERROR_NONE) {
+  Fs_File file_stdin;
+  if(fs_file_stdin(&file_stdin) != FS_ERROR_NONE) {
     TODO();
   }
 
@@ -48,16 +48,16 @@ int main() {
     }
 
     u64 read;
-    if(io_file_read(&file_stdin,
+    if(fs_file_read(&file_stdin,
 		    buf,
 		    sizeof(buf),
-		    &read) != IO_ERROR_NONE) {
+		    &read) != FS_ERROR_NONE) {
       TODO();
     }
     if(read >= sizeof(buf)) {
       TODO();
     }
-    if(read > IO_SEP_LEN) read -= IO_SEP_LEN;
+    if(read > FS_SEP_LEN) read -= FS_SEP_LEN;
     buf[read] = '\0';
 
     if(strcmp(buf, "b") == 0) {
