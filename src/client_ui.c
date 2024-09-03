@@ -1,5 +1,10 @@
 #include <stdio.h>
 
+#include <core/types.h>
+
+#define IP_IMPLEMENTATION
+#include <core/ip.h>
+
 #define FRAME_IMPLEMENTATION
 #include <core/frame.h>
 
@@ -14,11 +19,6 @@
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <thirdparty/stb_image.h>
-
-#include <core/types.h>
-
-#define IP_IMPLEMENTATION
-#include <core/ip.h>
 
 #define CHESS_IMPLEMENTATION
 #include "chess.h"
