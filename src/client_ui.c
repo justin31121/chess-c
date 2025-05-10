@@ -14,14 +14,17 @@
 #define MUI_IMPLEMENTATION
 #include <core/mui.h>
 
+#define PNM_IMPLEMENTATION
+#define PNM_NO_STDIO
+#include <core/pnm.h>
+
 #define STR_IMPLEMENTATION
 #include <core/str.h>
 
-#define STB_IMAGE_IMPLEMENTATION
-#include <thirdparty/stb_image.h>
-
 #define CHESS_IMPLEMENTATION
 #include "chess.h"
+
+#include "pieces.h"
 
 #define WIDTH 800
 #define HEIGHT 800
@@ -100,6 +103,13 @@ int main(s32 argc, char **argv) {
   if(!renderer_open(&renderer)) {
     TODO();
   }
+
+   s32 piecs_width,  
+
+PNM_DEF void *pnm_load_from_memory(const unsigned char *data, u64 data_len, int *width, int *height, int *channels, int desired_channels);
+   if(!pnm_info_from_memory(pieces_data, pieces_data_LEN, int *width, int *height, int *channels)) {
+    TODO();
+   }
 
   s32 pieces_width, pieces_height;
   u8 *pieces_data = stbi_load("pieces.png", &pieces_width, &pieces_height, 0, 4);
